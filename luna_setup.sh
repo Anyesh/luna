@@ -251,6 +251,8 @@ services:
     volumes:
       - ollama-data:/root/.ollama
     restart: unless-stopped
+    environment:
+      - OLLAMA_ORIGINS=*
     networks:
       - luna-net
     # For GPU support on Pi 5, uncomment the following:
@@ -275,7 +277,8 @@ services:
       - TRILIUM_URL=http://trilium:8080
       - OLLAMA_URL=http://ollama:11434
       - WHISPER_MODEL=${WHISPER_MODEL:-tiny}
-      - OLLAMA_MODEL=${OLLAMA_MODEL:-llama3.2:1b}
+      - OLLAMA_MODEL=${OLLAMA_MODEL:-gemma3:1b}
+      - OLLAMA_ORIGINS=*
     depends_on:
       - trilium
       - ollama
