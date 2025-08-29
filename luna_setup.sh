@@ -18,6 +18,7 @@ NC='\033[0m' # No Color
 TRILIUM_PORT=9876  # Trilium Notes web UI
 OLLAMA_PORT=9877   # Ollama API
 API_PORT=9878      # Luna API
+EXCALIDRAW_PORT=9879  # Excalidraw whiteboard
 TRILIUM_DATA_DIR="$HOME/trilium-data"
 PROJECT_DIR="$HOME/luna"
 # WHISPER_MODEL and OLLAMA_MODEL are set in check_system()
@@ -231,7 +232,7 @@ version: '3.8'
 
 services:
   trilium:
-    image: zadam/trilium:latest
+    image: triliumnext/trilium:latest
     container_name: trilium
     ports:
       - "9876:8080"  # Unique port for Trilium UI
@@ -263,6 +264,15 @@ services:
     #         - driver: nvidia
     #           count: 1
     #           capabilities: [gpu]
+
+  excalidraw:
+    image: excalidraw/excalidraw:latest
+    container_name: excalidraw
+    ports:
+      - "9879:80"  # Unique port for Excalidraw whiteboard
+    restart: unless-stopped
+    networks:
+      - luna-net
 
   luna-api:
     build: ./api
@@ -705,6 +715,68 @@ def ollama_chat():
         logging.error(f"Ollama chat failed: {e}")
         return jsonify({'error': 'Failed to get AI response'}), 500
 
+@app.route('/excalidraw-export', methods=['POST'])
+def excalidraw_export():
+    """Export Excalidraw drawing to Trilium as note"""
+    data = request.get_json()
+    
+    if not data or 'drawing' not in data:
+        return jsonify({'error': 'No drawing data provided'}), 400
+    
+    drawing_data = data['drawing']
+    title = data.get('title', f'Excalidraw Drawing - {datetime.now().strftime("%Y-%m-%d %H:%M")}')
+    parent_id = data.get('parent_note_id')
+    
+    try:
+        # Store the drawing data as JSON in a code note
+        content = f'<pre><code class="language-json">{json.dumps(drawing_data, indent=2)}</code></pre>'
+        
+        # Create note in Trilium
+        result = trilium_api.create_note(title, content, parent_id, note_type='code')
+        
+        if result:
+            logging.info(f"Exported Excalidraw drawing: {title}")
+            return jsonify({'success': True, 'note': result})
+        else:
+            return jsonify({'error': 'Failed to create note'}), 500
+            
+    except Exception as e:
+        logging.error(f"Excalidraw export failed: {e}")
+        return jsonify({'error': 'Failed to export drawing'}), 500
+
+@app.route('/excalidraw-describe', methods=['POST'])
+def excalidraw_describe():
+    """Use AI to describe an Excalidraw drawing"""
+    data = request.get_json()
+    
+    if not data or 'elements' not in data:
+        return jsonify({'error': 'No drawing elements provided'}), 400
+    
+    elements = data['elements']
+    
+    try:
+        # Extract text elements and basic structure
+        text_elements = [e.get('text', '') for e in elements if e.get('type') == 'text']
+        shape_count = len([e for e in elements if e.get('type') in ['rectangle', 'ellipse', 'arrow', 'line']])
+        
+        description_prompt = f"""Describe this diagram based on the following information:
+        - Text elements: {', '.join(text_elements) if text_elements else 'No text'}
+        - Number of shapes/connections: {shape_count}
+        
+        Provide a brief description of what this diagram likely represents."""
+        
+        description = ollama_api.enhance_text(description_prompt, "summarize")
+        
+        return jsonify({
+            'description': description,
+            'text_elements': text_elements,
+            'shape_count': shape_count
+        })
+        
+    except Exception as e:
+        logging.error(f"Excalidraw description failed: {e}")
+        return jsonify({'error': 'Failed to describe drawing'}), 500
+
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=5000, debug=False)
 EOF
@@ -954,6 +1026,30 @@ POST /quick-note
 GET /search?q=your_search_query
 ```
 
+#### 8. Export Excalidraw Drawing
+```
+POST /excalidraw-export
+```
+**Body:**
+```json
+{
+  "drawing": {},  // Excalidraw drawing data
+  "title": "Optional title",
+  "parent_note_id": "optional"
+}
+```
+
+#### 9. Describe Excalidraw Drawing
+```
+POST /excalidraw-describe
+```
+**Body:**
+```json
+{
+  "elements": []  // Array of Excalidraw elements
+}
+```
+
 ## Using with curl
 
 ### Example: Enhance text
@@ -1040,13 +1136,15 @@ create_aliases() {
 #!/bin/bash
 # LUNA aliases for easy access to services
 
-# Access Trilium web interface
+# Access web interfaces
 alias luna-trilium='echo "Open http://$(hostname -I | awk "{print \$1}"):9876 in your browser"'
+alias luna-excalidraw='echo "Open http://$(hostname -I | awk "{print \$1}"):9879 in your browser"'
 
 # Shell access to containers
 alias luna-api-shell='docker exec -it luna-api bash'
 alias luna-ollama-shell='docker exec -it ollama bash'
 alias luna-trilium-shell='docker exec -it trilium bash'
+alias luna-excalidraw-shell='docker exec -it excalidraw sh'
 
 # Quick notes
 alias luna-voice='python ~/luna/scripts/voice_note.py'
@@ -1059,6 +1157,7 @@ alias luna-test='curl -s http://localhost:9878/health | python3 -m json.tool'
 alias luna-logs='docker-compose -f ~/luna/docker-compose.yml logs -f'
 alias luna-logs-api='docker-compose -f ~/luna/docker-compose.yml logs -f luna-api'
 alias luna-logs-trilium='docker-compose -f ~/luna/docker-compose.yml logs -f trilium'
+alias luna-logs-excalidraw='docker-compose -f ~/luna/docker-compose.yml logs -f excalidraw'
 
 # Service management
 alias luna-start='cd ~/luna && docker-compose up -d'
@@ -1155,14 +1254,16 @@ LUNA is a complete self-hosted knowledge management system that combines:
 - **Trilium Notes**: Web-based note-taking and knowledge management
 - **Ollama**: Local LLM for text enhancement and generation
 - **Whisper**: Voice-to-text transcription
+- **Excalidraw**: Collaborative virtual whiteboard for diagrams and drawings
 - **Custom API**: Integration layer for all components
 
 ## Access Points
 
 - **Trilium Web Interface**: http://your-pi-ip:9876
+- **Excalidraw Whiteboard**: http://your-pi-ip:9879
 - **API Endpoints**: http://your-pi-ip:9878
 - **Ollama API**: http://your-pi-ip:9877
-- **Direct Docker Access**: `docker exec -it trilium bash`
+- **Direct Docker Access**: `docker exec -it [container_name] bash`
 
 ## Quick Commands
 
@@ -1232,6 +1333,9 @@ EOF
 # Trilium Configuration
 TRILIUM_PORT=9876
 TRILIUM_DATA_DIR=/home/pi/trilium-data
+
+# Excalidraw Configuration
+EXCALIDRAW_PORT=9879
 
 # Ollama Configuration
 OLLAMA_PORT=9877
@@ -1317,6 +1421,7 @@ main() {
     echo
     echo "Access Points:"
     echo "  📝 Trilium Notes: http://$(hostname -I | awk '{print $1}'):9876"
+    echo "  🎨 Excalidraw: http://$(hostname -I | awk '{print $1}'):9879"
     echo "  🤖 LUNA API: http://$(hostname -I | awk '{print $1}'):9878"
     echo "  🤯 Ollama API: http://$(hostname -I | awk '{print $1}'):9877"
     echo
@@ -1410,6 +1515,7 @@ update_luna() {
     print_status "Pulling latest Docker images..."
     docker pull zadam/trilium:latest
     docker pull ollama/ollama:latest
+    docker pull excalidraw/excalidraw:latest
     
     # Restart services
     print_status "Restarting services..."
